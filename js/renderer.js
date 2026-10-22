@@ -70,6 +70,8 @@ uniform sampler2D uBlur1;  // ~1/4 of the frost blur
 uniform sampler2D uBlur2;  // ~1/2
 uniform sampler2D uBlur3;  // full
 uniform sampler2D uDepth;
+uniform sampler2D uDepthPrev; // previous depth map, faded out over uDepthMix
+uniform float uDepthMix;
 uniform sampler2D uNoise;
 uniform vec2 uRes;
 uniform float uFocus;     // glass plane, 0..1 closeness
@@ -93,7 +95,9 @@ float hash(vec2 p) {
 
 void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
-  float d = texture(uDepth, uv).r;
+  // Live depth arrives a few times a second; easing from the previous map to the
+  // newest one keeps the mask moving at the display frame rate.
+  float d = mix(texture(uDepthPrev, uv).r, texture(uDepth, uv).r, uDepthMix);
   d = mix(d, 1.0 - d, uInvert);
 
   // How far behind the glass this pixel is, 0 = touching the glass, 1 = fully frosted.
@@ -201,12 +205,17 @@ export class FrostRenderer {
 
     this.colorTex = makeTexture(gl);
     this.depthTex = makeTexture(gl);
+    this.depthPrev = makeTexture(gl);
     this.levels = LEVELS.map(() => [this._fbo(), this._fbo()]);
     this.hasDepth = false;
 
     // Start with a flat "everything is near" depth so the image shows before the model is ready.
     this.setDepth(new Float32Array([1]), 1, 1);
+    this.setDepth(new Float32Array([1]), 1, 1);
     this.hasDepth = false;
+    this.colorW = 0;
+    this.colorH = 0;
+    this.blurKey = '';
   }
 
   _fbo() {
@@ -236,11 +245,22 @@ export class FrostRenderer {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.colorTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    this.blurKey = '';
+    // Reuse the texture storage when the size is unchanged instead of reallocating every frame.
+    const w = source.videoWidth || source.width, h = source.videoHeight || source.height;
+    if (w === this.colorW && h === this.colorH) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      this.colorW = w;
+      this.colorH = h;
+    }
   }
 
+  // The previous map is kept so render() can blend towards the new one.
   setDepth(data, w, h) {
     const gl = this.gl;
+    [this.depthPrev, this.depthTex] = [this.depthTex, this.depthPrev];
     gl.bindTexture(gl.TEXTURE_2D, this.depthTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, w, h, 0, gl.RED, gl.FLOAT, data);
@@ -264,30 +284,35 @@ export class FrostRenderer {
     }
 
     // Blur pyramid: each level blurs the previous one at a lower resolution, giving
-    // roughly 1/4, 1/2 and the full frost blur radius.
-    gl.useProgram(this.blurProg.p);
-    gl.uniform1i(this.blurProg.u.uTex, 0);
-    gl.activeTexture(gl.TEXTURE0);
-    let src = this.colorTex;
-    for (let i = 0; i < LEVELS.length; i++) {
-      const { scale, radius } = LEVELS[i];
-      const [A, B] = this.levels[i];
-      const bw = Math.max(1, Math.round(W * scale)), bh = Math.max(1, Math.round(H * scale));
-      this._resizeFbo(A, bw, bh);
-      this._resizeFbo(B, bw, bh);
-      const step = (params.blur * radius * scale) / 6;
-      gl.viewport(0, 0, bw, bh);
+    // roughly 1/4, 1/2 and the full frost blur radius. It only depends on the colour
+    // frame and blur radius, so frames that just blend depth or animate grain skip it.
+    const blurKey = `${W}x${H}@${params.blur}`;
+    if (blurKey !== this.blurKey) {
+      this.blurKey = blurKey;
+      gl.useProgram(this.blurProg.p);
+      gl.uniform1i(this.blurProg.u.uTex, 0);
+      gl.activeTexture(gl.TEXTURE0);
+      let src = this.colorTex;
+      for (let i = 0; i < LEVELS.length; i++) {
+        const { scale, radius } = LEVELS[i];
+        const [A, B] = this.levels[i];
+        const bw = Math.max(1, Math.round(W * scale)), bh = Math.max(1, Math.round(H * scale));
+        this._resizeFbo(A, bw, bh);
+        this._resizeFbo(B, bw, bh);
+        const step = (params.blur * radius * scale) / 6;
+        gl.viewport(0, 0, bw, bh);
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, A.fb);
-      gl.bindTexture(gl.TEXTURE_2D, src);
-      gl.uniform2f(this.blurProg.u.uDir, step / bw, 0);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, A.fb);
+        gl.bindTexture(gl.TEXTURE_2D, src);
+        gl.uniform2f(this.blurProg.u.uDir, step / bw, 0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, B.fb);
-      gl.bindTexture(gl.TEXTURE_2D, A.tex);
-      gl.uniform2f(this.blurProg.u.uDir, 0, step / bh);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      src = B.tex;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, B.fb);
+        gl.bindTexture(gl.TEXTURE_2D, A.tex);
+        gl.uniform2f(this.blurProg.u.uDir, 0, step / bh);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        src = B.tex;
+      }
     }
 
     // Composite to screen.
@@ -301,6 +326,7 @@ export class FrostRenderer {
       ['uBlur2', this.levels[1][1].tex],
       ['uBlur3', this.levels[2][1].tex],
       ['uDepth', this.depthTex],
+      ['uDepthPrev', this.depthPrev],
       ['uNoise', this.noise.tex],
     ];
     textures.forEach(([name, tex], unit) => {
@@ -311,6 +337,7 @@ export class FrostRenderer {
     gl.activeTexture(gl.TEXTURE0);
 
     gl.uniform2f(c.u.uRes, W, H);
+    gl.uniform1f(c.u.uDepthMix, params.depthMix ?? 1);
     gl.uniform1f(c.u.uFocus, params.focus);
     gl.uniform1f(c.u.uFade, params.fade);
     gl.uniform1f(c.u.uWhite, params.white);

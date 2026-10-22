@@ -43,7 +43,7 @@ const params = {
   invert: false,
   animateGrain: false,
   view: 0,
-  smoothing: 0.6,
+  smoothing: 0.25,
   sync: false,
 };
 
@@ -177,17 +177,33 @@ function liveDetail() {
 const grab = new OffscreenCanvas(1, 1);
 const grabCtx = grab.getContext('2d');
 function snapshot(frame, w, h) {
-  grab.width = w;
-  grab.height = h;
+  if (grab.width !== w || grab.height !== h) {
+    grab.width = w;
+    grab.height = h;
+  }
   grabCtx.drawImage(frame, 0, 0, w, h);
   return grab.transferToImageBitmap();
 }
 
+// createImageBitmap scales the frame off the main thread; fall back to the canvas
+// copy where it can't take this source.
+let asyncGrab = true;
+async function grabFrame(frame, w, h) {
+  if (asyncGrab) {
+    try {
+      return await createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'low' });
+    } catch {
+      asyncGrab = false;
+    }
+  }
+  return snapshot(frame, w, h);
+}
+
 // The frame goes to the worker as a small ImageBitmap, so the main thread never
 // waits on a GPU readback.
-function estimateDepth(frame, w, h, size) {
+async function estimateDepth(frame, w, h, size) {
   const s = Math.min(1, size / Math.max(w, h));
-  const bitmap = snapshot(frame, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)));
+  const bitmap = await grabFrame(frame, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)));
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
@@ -197,6 +213,14 @@ function estimateDepth(frame, w, h, size) {
 
 // Last depth map on the CPU: used for temporal smoothing and click-to-focus.
 let depth = null; // { data, width, height }
+
+// Live depth maps are blended in over roughly the time until the next one arrives.
+let depthAt = 0;
+let depthInterval = 0;
+function depthMix() {
+  if (!depthInterval || !source || source.kind === 'image' || params.sync || exporting) return 1;
+  return Math.min(1, (performance.now() - depthAt) / depthInterval);
+}
 
 function applyDepth(result, smoothing) {
   const { width, height } = result;
@@ -208,6 +232,9 @@ function applyDepth(result, smoothing) {
   const first = !depth;
   depth = { data, width, height };
   renderer.setDepth(data, width, height);
+  const now = performance.now();
+  depthInterval = depthAt && !first ? Math.min(500, now - depthAt) : 0;
+  depthAt = now;
   if (first) autoGlass();
 }
 
@@ -217,6 +244,7 @@ let source = null; // { kind: 'image'|'video'|'webcam', el, width, height }
 let stream = null;
 let busy = false;
 const depthTimes = [];
+let statusAt = 0;
 let exporting = false;
 
 function sizeFor(w, h, max) {
@@ -234,6 +262,7 @@ function stopSource() {
   }
   source = null;
   depth = null;
+  depthInterval = 0;
   renderer.hasDepth = false;
 }
 
@@ -314,7 +343,7 @@ async function pumpVideo() {
   busy = true;
   try {
     // In sync mode we keep a snapshot so colour and depth always match.
-    const still = params.sync ? snapshot(video, source.width, source.height) : null;
+    const still = params.sync ? await grabFrame(video, source.width, source.height) : null;
     const r = await estimateDepth(still || video, source.width, source.height, liveDetail());
     if (!source || source.el !== video) return;
     applyDepth(r, params.smoothing);
@@ -326,12 +355,19 @@ async function pumpVideo() {
     depthTimes.push(performance.now());
     while (depthTimes.length > 10) depthTimes.shift();
     const fps = depthTimes.length > 1 ? ((depthTimes.length - 1) * 1000) / (depthTimes.at(-1) - depthTimes[0]) : 0;
-    setStatus(`Depth ${fps.toFixed(1)} fps (${Math.round(r.ms)} ms per frame${onGPU ? '' : ', CPU'})`);
+    // Touching the DOM every depth frame costs layout and repaint; twice a second is plenty.
+    if (performance.now() - statusAt > 500) {
+      statusAt = performance.now();
+      setStatus(`Depth ${fps.toFixed(1)} fps (${Math.round(r.ms)} ms per frame${onGPU ? '' : ', CPU'})`);
+    }
   } catch (err) {
     setStatus(`Depth failed: ${err.message}`, false, 5000);
+    return;
   } finally {
     busy = false;
   }
+  // Keep the model busy: start on the next frame now instead of waiting for the next repaint.
+  pumpVideo();
 }
 
 // ---------------------------------------------------------------- render loop
@@ -359,8 +395,10 @@ function frame() {
       newVideoFrame = false;
       pumpVideo();
     }
-    if (dirty || params.animateGrain) {
-      renderer.render(currentParams());
+    // A playing video redraws on each new frame anyway, which is often enough to blend depth.
+    const mix = depthMix();
+    if (dirty || params.animateGrain || (mix < 1 && source.el.paused)) {
+      renderer.render({ ...currentParams(), depthMix: mix });
       dirty = false;
     }
   }
