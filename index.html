@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fogyou</title>
+  <meta name="description" content="Turn any image or video into frosted glass using AI depth estimation, right in your browser." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>fog<span>you</span></h1>
+    <p>Depth-aware frosted glass. Things close to the glass stay sharp; everything behind it fades into fog.</p>
+  </header>
+
+  <main>
+    <section id="stage-wrap">
+      <canvas id="stage" width="2" height="2"></canvas>
+      <div id="drop-hint">
+        <div>
+          <strong>Drop an image or video here</strong>
+          <span>or use the buttons on the right. Nothing leaves your device.</span>
+        </div>
+      </div>
+      <div id="status" class="loading">Starting…</div>
+    </section>
+
+    <aside id="panel">
+      <div class="group">
+        <h2>Source</h2>
+        <div class="row">
+          <label class="button primary">Open image / video<input id="file" type="file" accept="image/*,video/*" hidden /></label>
+          <button id="webcam">Webcam</button>
+        </div>
+        <label class="field">Depth model
+          <select id="model">
+            <option value="small" selected>Depth Anything V2 Small (fast, ~50 MB)</option>
+            <option value="base">Depth Anything V2 Base (sharper, ~200 MB)</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="group">
+        <h2>Glass</h2>
+        <label class="field">Look
+          <select id="preset">
+            <option value="pressed" selected>Pressed on glass</option>
+            <option value="classic">Classic frost</option>
+            <option value="dense">Dense fog</option>
+          </select>
+        </label>
+        <p class="hint">Tip: click the picture to put the glass at that depth.</p>
+        <label class="slider">Glass distance <output id="focus-val"></output>
+          <input id="focus" type="range" min="0" max="1" step="0.005" value="0.55" /></label>
+        <div class="row tight"><button id="auto-glass">Auto-place glass</button></div>
+        <label class="slider">Fade depth <output id="fade-val"></output>
+          <input id="fade" type="range" min="0.02" max="1" step="0.01" value="0.3" /></label>
+        <label class="slider">Frost blur <output id="blur-val"></output>
+          <input id="blur" type="range" min="0" max="160" step="1" value="24" /></label>
+        <label class="slider">Whiteness <output id="white-val"></output>
+          <input id="white" type="range" min="0" max="1" step="0.01" value="0.85" /></label>
+        <label class="slider">Frost texture <output id="frost-val"></output>
+          <input id="frost" type="range" min="0" max="1" step="0.01" value="0.5" /></label>
+        <label class="slider">Texture scale <output id="scale-val"></output>
+          <input id="scale" type="range" min="0.3" max="3" step="0.05" value="1" /></label>
+        <label class="slider">Glass haze <output id="haze-val"></output>
+          <input id="haze" type="range" min="0" max="0.5" step="0.01" value="0" /></label>
+        <label class="slider">Contact softness <output id="contact-val"></output>
+          <input id="contact" type="range" min="0" max="0.5" step="0.01" value="0" /></label>
+        <label class="slider">Saturation <output id="saturation-val"></output>
+          <input id="saturation" type="range" min="0" max="1.5" step="0.01" value="1" /></label>
+        <div class="row">
+          <label class="field inline">Fog colour <input id="tint" type="color" value="#ffffff" /></label>
+          <label class="check"><input id="invert" type="checkbox" /> Invert depth</label>
+          <label class="check"><input id="animateGrain" type="checkbox" /> Animated grain</label>
+        </div>
+      </div>
+
+      <div class="group video-only">
+        <h2>Video</h2>
+        <label class="slider">Temporal smoothing <output id="smoothing-val"></output>
+          <input id="smoothing" type="range" min="0" max="0.95" step="0.01" value="0.6" /></label>
+        <label class="check"><input id="sync" type="checkbox" /> Lock colour to depth (no lag, lower fps)</label>
+        <div class="row"><button id="play">Pause</button></div>
+      </div>
+
+      <div class="group">
+        <h2>View</h2>
+        <div class="segmented">
+          <button data-view="0" class="active">Effect</button>
+          <button data-view="1">Depth</button>
+          <button data-view="3">Mask</button>
+          <button data-view="2">Original</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Export</h2>
+        <div class="row">
+          <button id="save-png">Save PNG</button>
+          <button id="record">Record live</button>
+        </div>
+        <div class="row video-only">
+          <button id="export-video" disabled>Export video (MP4)</button>
+          <label class="field inline">FPS
+            <select id="fps"><option>24</option><option selected>30</option><option>60</option></select>
+          </label>
+        </div>
+        <p class="hint video-only">Export runs the depth model on every frame, so it is slower than real time but frame-accurate.</p>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

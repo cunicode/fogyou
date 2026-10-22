@@ -1,0 +1,142 @@
+:root {
+  --bg: #eef2f5;
+  --panel: rgba(255, 255, 255, 0.72);
+  --border: rgba(20, 40, 60, 0.12);
+  --text: #16212b;
+  --muted: #5c6b78;
+  --accent: #2f7bbd;
+  --accent-text: #fff;
+  --stage: #dfe6ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1418;
+    --panel: rgba(30, 38, 46, 0.8);
+    --border: rgba(200, 220, 240, 0.12);
+    --text: #e6edf3;
+    --muted: #93a1ad;
+    --accent: #6fb3ee;
+    --accent-text: #08131c;
+    --stage: #161d23;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: Inter, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header { padding: 20px 24px 8px; }
+h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
+h1 span { color: var(--muted); font-weight: 400; }
+header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+main {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  padding: 16px 24px 24px;
+  align-items: start;
+}
+
+#stage-wrap {
+  position: relative;
+  background: var(--stage);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+#stage-wrap.drag { outline: 2px dashed var(--accent); outline-offset: -8px; }
+#stage {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 160px);
+  cursor: crosshair;
+}
+body:not(.has-source) #stage { visibility: hidden; position: absolute; }
+#drop-hint { text-align: center; color: var(--muted); padding: 24px; }
+#drop-hint strong { display: block; color: var(--text); font-size: 18px; font-weight: 500; margin-bottom: 6px; }
+
+#status {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+  max-width: calc(100% - 24px);
+}
+#status.loading::before {
+  content: '';
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1s infinite ease-in-out;
+}
+@keyframes pulse { 50% { opacity: 0.2; } }
+
+#panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 4px 16px;
+  backdrop-filter: blur(16px);
+}
+.group { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.group:last-child { border-bottom: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.hint { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+
+button, .button, select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+button:hover, .button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.recording { background: #d23c3c; border-color: #d23c3c; color: #fff; }
+
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin-top: 10px; }
+.field.inline { flex-direction: row; align-items: center; margin-top: 0; }
+select { width: 100%; }
+.field.inline select { width: auto; }
+input[type='color'] { width: 32px; height: 26px; border: 1px solid var(--border); border-radius: 6px; padding: 0; background: none; }
+
+.slider { display: grid; grid-template-columns: 1fr auto; font-size: 13px; margin-bottom: 8px; }
+.slider output { color: var(--muted); font-variant-numeric: tabular-nums; }
+.slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+.check { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+
+.segmented { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.segmented button { flex: 1; border: 0; border-radius: 0; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active { background: var(--accent); color: var(--accent-text); }
+
+body:not(.is-video) .video-only { display: none; }
+
+@media (max-width: 820px) {
+  header { padding: 16px 16px 4px; }
+  main { grid-template-columns: 1fr; padding: 12px 16px 16px; }
+  #stage-wrap { min-height: 45vh; }
+}
+.row.tight { margin: 0 0 12px; }
