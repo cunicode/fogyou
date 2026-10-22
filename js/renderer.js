@@ -31,27 +31,13 @@ void main() {
   outColor = c / 0.9822;
 }`;
 
-const COMPOSITE_FRAG = `#version 300 es
+// Frost texture, rendered once per size/scale instead of every frame:
+// r = large blotches, g = fine crystals, ba = refraction warp.
+const NOISE_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
-uniform sampler2D uColor;
-uniform sampler2D uBlur1;  // ~1/4 of the frost blur
-uniform sampler2D uBlur2;  // ~1/2
-uniform sampler2D uBlur3;  // full
-uniform sampler2D uDepth;
 uniform vec2 uRes;
-uniform float uFocus;     // glass plane, 0..1 closeness
-uniform float uFade;      // depth range over which the scene fades out
-uniform float uWhite;     // max whiteness
-uniform float uFrost;     // frost texture strength (distortion + grain)
-uniform float uScale;     // frost texture scale
-uniform float uHaze;      // veil the glass puts over everything, even what touches it
-uniform float uContact;   // softness of things touching the glass
-uniform float uSat;       // overall saturation
-uniform float uInvert;
-uniform float uView;      // 0 effect, 1 depth, 2 original, 3 mask
-uniform float uTime;
-uniform vec3 uTint;
+uniform float uScale;
 out vec4 outColor;
 
 float hash(vec2 p) {
@@ -72,6 +58,40 @@ float fbm(vec2 p) {
 }
 
 void main() {
+  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uRes / (uScale * 40.0);
+  outColor = vec4(fbm(p * 0.5 + 3.1), fbm(p * 6.0), fbm(p * 2.0 + 7.3), fbm(p * 2.0 - 1.7));
+}`;
+
+const COMPOSITE_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uColor;
+uniform sampler2D uBlur1;  // ~1/4 of the frost blur
+uniform sampler2D uBlur2;  // ~1/2
+uniform sampler2D uBlur3;  // full
+uniform sampler2D uDepth;
+uniform sampler2D uNoise;
+uniform vec2 uRes;
+uniform float uFocus;     // glass plane, 0..1 closeness
+uniform float uFade;      // depth range over which the scene fades out
+uniform float uWhite;     // max whiteness
+uniform float uFrost;     // frost texture strength (distortion + grain)
+uniform float uHaze;      // veil the glass puts over everything, even what touches it
+uniform float uContact;   // softness of things touching the glass
+uniform float uSat;       // overall saturation
+uniform float uInvert;
+uniform float uView;      // 0 effect, 1 depth, 2 original, 3 mask
+uniform float uTime;
+uniform vec3 uTint;
+out vec4 outColor;
+
+float hash(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
   float d = texture(uDepth, uv).r;
   d = mix(d, 1.0 - d, uInvert);
@@ -84,10 +104,10 @@ void main() {
   float frost = behind * behind;
 
   // Frost texture: large blotches + fine crystals, in pixel space so it doesn't stretch.
-  vec2 p = uv * uRes / (uScale * 40.0);
-  float blotch = fbm(p * 0.5 + 3.1);
-  float crystal = fbm(p * 6.0);
-  vec2 warp = vec2(fbm(p * 2.0 + 7.3), fbm(p * 2.0 - 1.7)) - 0.5;
+  vec4 nz = texture(uNoise, uv);
+  float blotch = nz.r;
+  float crystal = nz.g;
+  vec2 warp = nz.ba - 0.5;
 
   vec2 off = warp * uFrost * blurAmt * 0.04;
   vec3 sharp = texture(uColor, uv).rgb;
@@ -163,12 +183,15 @@ function makeTexture(gl) {
 export class FrostRenderer {
   constructor(canvas) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false });
+    const gl = canvas.getContext('webgl2', { antialias: false, depth: false });
     if (!gl) throw new Error('WebGL2 is not supported in this browser.');
     this.gl = gl;
 
     this.blurProg = program(gl, BLUR_FRAG);
     this.compProg = program(gl, COMPOSITE_FRAG);
+    this.noiseProg = program(gl, NOISE_FRAG);
+    this.noise = this._fbo();
+    this.noiseKey = '';
 
     const vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -228,6 +251,18 @@ export class FrostRenderer {
     const gl = this.gl;
     const W = this.canvas.width, H = this.canvas.height;
 
+    const key = `${W}x${H}@${params.scale}`;
+    if (key !== this.noiseKey) {
+      this.noiseKey = key;
+      this._resizeFbo(this.noise, W, H);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.noise.fb);
+      gl.viewport(0, 0, W, H);
+      gl.useProgram(this.noiseProg.p);
+      gl.uniform2f(this.noiseProg.u.uRes, W, H);
+      gl.uniform1f(this.noiseProg.u.uScale, params.scale);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
     // Blur pyramid: each level blurs the previous one at a lower resolution, giving
     // roughly 1/4, 1/2 and the full frost blur radius.
     gl.useProgram(this.blurProg.p);
@@ -266,6 +301,7 @@ export class FrostRenderer {
       ['uBlur2', this.levels[1][1].tex],
       ['uBlur3', this.levels[2][1].tex],
       ['uDepth', this.depthTex],
+      ['uNoise', this.noise.tex],
     ];
     textures.forEach(([name, tex], unit) => {
       gl.activeTexture(gl.TEXTURE0 + unit);
@@ -279,7 +315,6 @@ export class FrostRenderer {
     gl.uniform1f(c.u.uFade, params.fade);
     gl.uniform1f(c.u.uWhite, params.white);
     gl.uniform1f(c.u.uFrost, params.frost);
-    gl.uniform1f(c.u.uScale, params.scale);
     gl.uniform1f(c.u.uHaze, params.haze);
     gl.uniform1f(c.u.uContact, params.contact);
     gl.uniform1f(c.u.uSat, params.saturation);

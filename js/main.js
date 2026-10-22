@@ -118,6 +118,7 @@ $('auto-glass').addEventListener('click', autoGlass);
 
 const worker = new Worker(new URL('./depth-worker.js', import.meta.url), { type: 'module' });
 let modelReady = false;
+let onGPU = false;
 let nextId = 1;
 const pending = new Map();
 const progress = new Map();
@@ -131,7 +132,14 @@ worker.onmessage = (e) => {
     setStatus(`Downloading depth model… ${t ? Math.round((l / t) * 100) : 0}%`, true);
   } else if (msg.type === 'ready') {
     modelReady = true;
-    setStatus(`Depth model ready (${msg.device})`);
+    onGPU = msg.gpu;
+    setStatus(
+      onGPU
+        ? `Depth model ready (${msg.device})`
+        : 'Depth model running on the CPU (no WebGPU here), so video will be slow. Chrome or Edge on desktop use the GPU.',
+      false,
+      onGPU ? 0 : 8000,
+    );
     $('model').disabled = false;
     if (source) refreshDepth();
   } else if (msg.type === 'depth') {
@@ -157,21 +165,33 @@ function loadModel() {
 $('model').addEventListener('change', loadModel);
 loadModel();
 
-// Downscaled copy of the frame that is sent to the model.
-const grab = document.createElement('canvas');
-const grabCtx = grab.getContext('2d', { willReadFrequently: true });
-const DEPTH_MAX_SIDE = 640;
+// Model input size (long side). Smaller is much faster; stills always get full detail.
+const IMAGE_DETAIL = 700;
+function liveDetail() {
+  return Number($('detail').value);
+}
 
-function estimateDepth(frame, w, h) {
-  const s = Math.min(1, DEPTH_MAX_SIDE / Math.max(w, h));
-  grab.width = Math.max(1, Math.round(w * s));
-  grab.height = Math.max(1, Math.round(h * s));
-  grabCtx.drawImage(frame, 0, 0, grab.width, grab.height);
-  const { data } = grabCtx.getImageData(0, 0, grab.width, grab.height);
+// Copies a frame (image, bitmap or video) into an ImageBitmap of the given size.
+// Drawing through a canvas works for every source; createImageBitmap(video) does not
+// in all browsers.
+const grab = new OffscreenCanvas(1, 1);
+const grabCtx = grab.getContext('2d');
+function snapshot(frame, w, h) {
+  grab.width = w;
+  grab.height = h;
+  grabCtx.drawImage(frame, 0, 0, w, h);
+  return grab.transferToImageBitmap();
+}
+
+// The frame goes to the worker as a small ImageBitmap, so the main thread never
+// waits on a GPU readback.
+function estimateDepth(frame, w, h, size) {
+  const s = Math.min(1, size / Math.max(w, h));
+  const bitmap = snapshot(frame, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)));
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    worker.postMessage({ type: 'depth', id, pixels: data.buffer, width: grab.width, height: grab.height }, [data.buffer]);
+    worker.postMessage({ type: 'depth', id, bitmap, size }, [bitmap]);
   });
 }
 
@@ -196,11 +216,12 @@ function applyDepth(result, smoothing) {
 let source = null; // { kind: 'image'|'video'|'webcam', el, width, height }
 let stream = null;
 let busy = false;
+const depthTimes = [];
 let exporting = false;
 
-function sizeFor(w, h) {
+function sizeFor(w, h, max) {
   // Even dimensions (required by H.264) and capped for performance.
-  const s = Math.min(1, 1920 / Math.max(w, h));
+  const s = Math.min(1, max / Math.max(w, h));
   return [Math.max(2, Math.round((w * s) / 2) * 2), Math.max(2, Math.round((h * s) / 2) * 2)];
 }
 
@@ -255,9 +276,11 @@ async function openWebcam() {
 }
 
 function startSource() {
-  const [w, h] = sizeFor(source.width, source.height);
+  // Live sources render smaller to keep the frame rate up.
+  const [w, h] = sizeFor(source.width, source.height, source.kind === 'image' ? 1920 : 1280);
   renderer.setSize(w, h);
   renderer.setColor(source.el);
+  if (source.kind !== 'image') watchFrames(source.el);
   dropHint.hidden = true;
   document.body.classList.add('has-source');
   document.body.classList.toggle('is-video', source.kind !== 'image');
@@ -272,7 +295,7 @@ async function refreshDepth() {
   if (source.kind === 'image') {
     setStatus('Estimating depth…', true);
     try {
-      const r = await estimateDepth(source.el, source.width, source.height);
+      const r = await estimateDepth(source.el, source.width, source.height, IMAGE_DETAIL);
       applyDepth(r, 0);
       setStatus(`Depth ready in ${Math.round(r.ms)} ms — click the image to place the glass`);
       requestRender();
@@ -291,15 +314,19 @@ async function pumpVideo() {
   busy = true;
   try {
     // In sync mode we keep a snapshot so colour and depth always match.
-    const snapshot = params.sync ? await createImageBitmap(video) : null;
-    const r = await estimateDepth(snapshot || video, source.width, source.height);
+    const still = params.sync ? snapshot(video, source.width, source.height) : null;
+    const r = await estimateDepth(still || video, source.width, source.height, liveDetail());
     if (!source || source.el !== video) return;
     applyDepth(r, params.smoothing);
-    if (snapshot) {
-      renderer.setColor(snapshot);
-      snapshot.close();
+    requestRender();
+    if (still) {
+      renderer.setColor(still);
+      still.close();
     }
-    setStatus(`Live depth: ${Math.round(r.ms)} ms/frame (${(1000 / r.ms).toFixed(1)} fps)`);
+    depthTimes.push(performance.now());
+    while (depthTimes.length > 10) depthTimes.shift();
+    const fps = depthTimes.length > 1 ? ((depthTimes.length - 1) * 1000) / (depthTimes.at(-1) - depthTimes[0]) : 0;
+    setStatus(`Depth ${fps.toFixed(1)} fps (${Math.round(r.ms)} ms per frame${onGPU ? '' : ', CPU'})`);
   } catch (err) {
     setStatus(`Depth failed: ${err.message}`, false, 5000);
   } finally {
@@ -309,14 +336,30 @@ async function pumpVideo() {
 
 // ---------------------------------------------------------------- render loop
 
+// Video frames only need uploading when the video actually shows a new one.
+let newVideoFrame = false;
+function watchFrames(video) {
+  if (!('requestVideoFrameCallback' in video)) return;
+  const onFrame = () => {
+    newVideoFrame = true;
+    if (source?.el === video) video.requestVideoFrameCallback(onFrame);
+  };
+  video.requestVideoFrameCallback(onFrame);
+}
+
 function frame() {
   if (source && !exporting) {
     const live = source.kind !== 'image';
     if (live) {
-      if (!params.sync) renderer.setColor(source.el);
+      const fresh = 'requestVideoFrameCallback' in source.el ? newVideoFrame : !source.el.paused;
+      if (fresh && !params.sync) {
+        renderer.setColor(source.el);
+        dirty = true;
+      }
+      newVideoFrame = false;
       pumpVideo();
     }
-    if (dirty || live || params.animateGrain) {
+    if (dirty || params.animateGrain) {
       renderer.render(currentParams());
       dirty = false;
     }
@@ -469,7 +512,7 @@ $('export-video').addEventListener('click', async () => {
     for (let i = 0; i < total && !cancelExport && !encodeError; i++) {
       video.currentTime = i / fps;
       await new Promise((r) => video.addEventListener('seeked', r, { once: true }));
-      const r = await estimateDepth(video, source.width, source.height);
+      const r = await estimateDepth(video, source.width, source.height, Math.max(liveDetail(), 518));
       applyDepth(r, params.smoothing);
       renderer.setColor(video);
       renderer.render(params);

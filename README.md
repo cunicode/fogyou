@@ -21,7 +21,7 @@ python3 -m http.server 8000
 
 The model (~50 MB for Small, ~200 MB for Base) downloads from Hugging Face the first time and is cached by the
 browser after that. It runs on WebGPU when available (Chrome / Edge), otherwise on WebAssembly, which is slower.
-Your images never leave the device.
+Your images never leave the device. The status line shows the depth frame rate; if it says the model runs on the CPU, video will be slow, so switch to Chrome or Edge on desktop.
 
 ## Controls
 
@@ -38,6 +38,7 @@ Your images never leave the device.
 | **Saturation** | Overall colour saturation (frosted glass mutes colour). |
 | **Fog colour** | Colour things fade to (white by default). |
 | **Invert depth** | Flip near/far, for when you want the background sharp. |
+| **Depth detail** | (Video) model input size. *Fast* is the smoothest; *High* gives finer edges. Photos always use full detail. |
 | **Temporal smoothing** | (Video) blends depth between frames to stop flicker. |
 | **Lock colour to depth** | (Video) shows each frame together with its own depth map: no lag, but plays at the model's speed. |
 | **View** | Effect, the raw depth map, the sharp/frost mask, or the original. |
