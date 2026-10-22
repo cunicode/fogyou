@@ -49,6 +49,7 @@
             <option value="pressed" selected>Pressed on glass</option>
             <option value="classic">Classic frost</option>
             <option value="dense">Dense fog</option>
+            <option value="steam">Steam</option>
           </select>
         </label>
         <p class="hint">Tip: click the picture to put the glass at that depth.</p>
@@ -67,6 +68,10 @@
           <input id="scale" type="range" min="0.3" max="3" step="0.05" value="1" /></label>
         <label class="slider">Glass haze <output id="haze-val"></output>
           <input id="haze" type="range" min="0" max="0.5" step="0.01" value="0" /></label>
+        <label class="slider">Smoke <output id="smoke-val"></output>
+          <input id="smoke" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <label class="slider">Smoke drift <output id="drift-val"></output>
+          <input id="drift" type="range" min="0" max="2" step="0.01" value="0.4" /></label>
         <label class="slider">Contact softness <output id="contact-val"></output>
           <input id="contact" type="range" min="0" max="0.5" step="0.01" value="0" /></label>
         <label class="slider">Saturation <output id="saturation-val"></output>

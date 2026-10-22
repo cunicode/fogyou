@@ -37,6 +37,8 @@ const params = {
   frost: 0.5,
   scale: 1,
   haze: 0,
+  smoke: 0,
+  drift: 0.4,
   contact: 0,
   saturation: 1,
   tint: [1, 1, 1],
@@ -47,7 +49,7 @@ const params = {
   sync: false,
 };
 
-const sliders = ['focus', 'fade', 'blur', 'white', 'frost', 'scale', 'haze', 'contact', 'saturation', 'smoothing'];
+const sliders = ['focus', 'fade', 'blur', 'white', 'frost', 'scale', 'haze', 'smoke', 'drift', 'contact', 'saturation', 'smoothing'];
 for (const key of sliders) {
   const input = $(key);
   const out = $(`${key}-val`);
@@ -88,9 +90,11 @@ function setSlider(key, value) {
 const PRESETS = {
   // Hands and face pressed on a frosted shower door: only the contact is clear, the rest
   // dissolves into a cool, slightly grey haze with fine grain over everything.
-  pressed: { fade: 0.45, blur: 90, white: 0.8, frost: 0.55, scale: 0.6, haze: 0.14, contact: 0.1, saturation: 0.75, tint: '#e8edf1' },
-  classic: { fade: 0.3, blur: 24, white: 0.85, frost: 0.5, scale: 1, haze: 0, contact: 0, saturation: 1, tint: '#ffffff' },
-  dense: { fade: 0.2, blur: 140, white: 0.95, frost: 0.7, scale: 1.2, haze: 0.22, contact: 0.2, saturation: 0.6, tint: '#f3f5f7' },
+  pressed: { fade: 0.45, blur: 90, white: 0.8, frost: 0.55, scale: 0.6, haze: 0.14, smoke: 0.3, drift: 0.3, contact: 0.1, saturation: 0.75, tint: '#e8edf1' },
+  classic: { fade: 0.3, blur: 24, white: 0.85, frost: 0.5, scale: 1, haze: 0, smoke: 0, drift: 0.4, contact: 0, saturation: 1, tint: '#ffffff' },
+  dense: { fade: 0.2, blur: 140, white: 0.95, frost: 0.7, scale: 1.2, haze: 0.22, smoke: 0.45, drift: 0.4, contact: 0.2, saturation: 0.6, tint: '#f3f5f7' },
+  // Hot shower: thick steam rolling behind the glass, warm and soft.
+  steam: { fade: 0.35, blur: 110, white: 0.7, frost: 0.4, scale: 0.8, haze: 0.1, smoke: 0.8, drift: 0.7, contact: 0.08, saturation: 0.8, tint: '#f4f1ee' },
 };
 
 function applyPreset(name) {
@@ -383,7 +387,15 @@ function watchFrames(video) {
   video.requestVideoFrameCallback(onFrame);
 }
 
+// Smoke time advances with the drift speed, so changing speed never makes it jump.
+let smokeTime = 0;
+let lastFrameAt = performance.now();
+
 function frame() {
+  const now = performance.now();
+  const smoking = params.smoke > 0 && params.drift > 0;
+  if (smoking && !exporting) smokeTime += (Math.min(100, now - lastFrameAt) / 1000) * params.drift;
+  lastFrameAt = now;
   if (source && !exporting) {
     const live = source.kind !== 'image';
     if (live) {
@@ -397,8 +409,8 @@ function frame() {
     }
     // A playing video redraws on each new frame anyway, which is often enough to blend depth.
     const mix = depthMix();
-    if (dirty || params.animateGrain || (mix < 1 && source.el.paused)) {
-      renderer.render({ ...currentParams(), depthMix: mix });
+    if (dirty || smoking || params.animateGrain || (mix < 1 && source.el.paused)) {
+      renderer.render({ ...currentParams(), depthMix: mix, smokeTime });
       dirty = false;
     }
   }
@@ -408,7 +420,8 @@ requestAnimationFrame(frame);
 
 function currentParams() {
   // Until a depth map exists, show the original instead of a fully frosted frame.
-  return renderer.hasDepth ? params : { ...params, view: 2 };
+  const p = { ...params, smokeTime };
+  return renderer.hasDepth ? p : { ...p, view: 2 };
 }
 
 // ---------------------------------------------------------------- interaction
@@ -553,7 +566,8 @@ $('export-video').addEventListener('click', async () => {
       const r = await estimateDepth(video, source.width, source.height, Math.max(liveDetail(), 518));
       applyDepth(r, params.smoothing);
       renderer.setColor(video);
-      renderer.render(params);
+      // Smoke moves with video time, so the export looks the same at any encode speed.
+      renderer.render({ ...params, smokeTime: smokeTime + (i / fps) * params.drift });
       const vf = new VideoFrame(canvas, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(vf, { keyFrame: i % (fps * 2) === 0 });
       vf.close();

@@ -62,6 +62,47 @@ void main() {
   outColor = vec4(fbm(p * 0.5 + 3.1), fbm(p * 6.0), fbm(p * 2.0 + 7.3), fbm(p * 2.0 - 1.7));
 }`;
 
+// Drifting smoke, rendered each frame at low resolution (it is soft anyway).
+// Domain-warped noise: each layer is pushed around by the one before it, which reads
+// as fog curling and folding over itself. r = density, gb = flow direction.
+const SMOKE_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform vec2 uRes;
+uniform float uScale;
+uniform float uTime;
+out vec4 outColor;
+
+float hash(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+  for (int i = 0; i < 4; i++) { v += a * noise(p); p = rot * p * 2.02; a *= 0.5; }
+  return v;
+}
+
+void main() {
+  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uRes / (uScale * 420.0);
+  float t = uTime;
+  // Warm air rises: the whole field drifts slowly upwards and sideways.
+  p += vec2(0.07 * t, 0.12 * t);
+  vec2 q = vec2(fbm(p + vec2(0.0, 0.11 * t)), fbm(p + vec2(5.2, 1.3) - 0.09 * t));
+  vec2 r = vec2(fbm(p + 2.2 * q + vec2(1.7, 9.2) + 0.15 * t), fbm(p + 2.2 * q + vec2(8.3, 2.8) - 0.12 * t));
+  float f = fbm(p + 1.8 * r);
+  float density = smoothstep(0.25, 0.8, f * 1.1 + 0.25 * length(q));
+  outColor = vec4(density, r, 1.0);
+}`;
+
 const COMPOSITE_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -73,6 +114,8 @@ uniform sampler2D uDepth;
 uniform sampler2D uDepthPrev; // previous depth map, faded out over uDepthMix
 uniform float uDepthMix;
 uniform sampler2D uNoise;
+uniform sampler2D uSmokeTex;
+uniform float uSmoke;     // amount of drifting smoke behind the glass
 uniform vec2 uRes;
 uniform float uFocus;     // glass plane, 0..1 closeness
 uniform float uFade;      // depth range over which the scene fades out
@@ -113,7 +156,12 @@ void main() {
   float crystal = nz.g;
   vec2 warp = nz.ba - 0.5;
 
-  vec2 off = warp * uFrost * blurAmt * 0.04;
+  // Drifting smoke: thickest far behind the glass, a wisp in front of it.
+  vec3 smk = texture(uSmokeTex, uv).rgb;
+  float smoke = uSmoke * smk.r * (0.25 + 0.75 * blurAmt);
+
+  // The flowing smoke also bends what is seen through it.
+  vec2 off = warp * uFrost * blurAmt * 0.04 + (smk.gb - 0.5) * uSmoke * blurAmt * 0.03;
   vec3 sharp = texture(uColor, uv).rgb;
   vec3 b1 = texture(uBlur1, uv + off * 0.3).rgb;
   vec3 b2 = texture(uBlur2, uv + off * 0.6).rgb;
@@ -126,6 +174,7 @@ void main() {
   // Whiteness grows with distance behind the glass; patchy so it reads as condensation.
   float white = uWhite * frost * mix(1.0, 0.75 + 0.5 * blotch, uFrost);
   col = mix(col, uTint, clamp(white, 0.0, 1.0));
+  col = mix(col, uTint, clamp(smoke, 0.0, 1.0));
   // The glass itself scatters a little light over everything.
   col = mix(col, uTint, uHaze * (0.85 + 0.3 * blotch));
   float luma = dot(col, vec3(0.299, 0.587, 0.114));
@@ -196,6 +245,8 @@ export class FrostRenderer {
     this.noiseProg = program(gl, NOISE_FRAG);
     this.noise = this._fbo();
     this.noiseKey = '';
+    this.smokeProg = program(gl, SMOKE_FRAG);
+    this.smoke = this._fbo();
 
     const vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -283,6 +334,18 @@ export class FrostRenderer {
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
+    if (params.smoke > 0) {
+      const sw = Math.max(1, Math.round(W / 4)), sh = Math.max(1, Math.round(H / 4));
+      this._resizeFbo(this.smoke, sw, sh);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.smoke.fb);
+      gl.viewport(0, 0, sw, sh);
+      gl.useProgram(this.smokeProg.p);
+      gl.uniform2f(this.smokeProg.u.uRes, W, H);
+      gl.uniform1f(this.smokeProg.u.uScale, params.scale);
+      gl.uniform1f(this.smokeProg.u.uTime, params.smokeTime || 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
     // Blur pyramid: each level blurs the previous one at a lower resolution, giving
     // roughly 1/4, 1/2 and the full frost blur radius. It only depends on the colour
     // frame and blur radius, so frames that just blend depth or animate grain skip it.
@@ -328,6 +391,7 @@ export class FrostRenderer {
       ['uDepth', this.depthTex],
       ['uDepthPrev', this.depthPrev],
       ['uNoise', this.noise.tex],
+      ['uSmokeTex', this.smoke.tex],
     ];
     textures.forEach(([name, tex], unit) => {
       gl.activeTexture(gl.TEXTURE0 + unit);
@@ -343,6 +407,7 @@ export class FrostRenderer {
     gl.uniform1f(c.u.uWhite, params.white);
     gl.uniform1f(c.u.uFrost, params.frost);
     gl.uniform1f(c.u.uHaze, params.haze);
+    gl.uniform1f(c.u.uSmoke, params.smoke);
     gl.uniform1f(c.u.uContact, params.contact);
     gl.uniform1f(c.u.uSat, params.saturation);
     gl.uniform1f(c.u.uInvert, params.invert ? 1 : 0);
