@@ -27,13 +27,14 @@ Your images never leave the device. The status line shows the depth frame rate; 
 
 | Control | What it does |
 | --- | --- |
-| **Look** | Presets. *Pressed on glass* (default) imitates hands and a face pressed on a frosted shower door; also *Classic frost* and *Dense fog*. |
+| **Look** | Presets. *Pressed on glass* (default) imitates hands and a face pressed on a frosted shower door; also *Classic frost*, *Dense fog* and *Steam*. |
 | **Glass distance** | Where the glass sits in depth (1 = closest to camera). It's placed automatically just behind the nearest parts of the scene; click the picture or use *Auto-place glass* to move it. |
 | **Fade depth** | How far behind the glass it takes to go fully white. Small = hard cut-out, large = gentle fog. |
 | **Frost blur** | Maximum blur radius. Blur grows continuously with distance behind the glass. |
 | **Whiteness** | How white the fully-frosted areas get. |
 | **Frost texture / scale** | Patchy condensation, refraction warp and ice grain. |
 | **Glass haze** | A light veil over everything, including what touches the glass. |
+| **Smoke / Smoke drift** | Animated fog rolling behind the glass, and how fast it moves. It also bends what you see through it. |
 | **Contact softness** | How soft the parts touching the glass are. |
 | **Saturation** | Overall colour saturation (frosted glass mutes colour). |
 | **Fog colour** | Colour things fade to (white by default). |
